@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/cpu"
 )
 
 // CPUCollector reads Intel coretemp temperature and Intel RAPL package power.
@@ -32,12 +34,23 @@ func NewCPUCollector() (*CPUCollector, error) {
 		}
 	}
 
+	// Prime both aggregate and per-core CPU percent counters so the first
+	// Collect() call returns accurate deltas rather than 0.
+	_, _ = cpu.Percent(0, false)
+	_, _ = cpu.Percent(0, true)
+
 	return c, nil
 }
 
-// Collect returns (cpu package temperature °C, cpu package power watts).
-// Returns 0 for values that cannot be read.
-func (c *CPUCollector) Collect() (tempC float64, watts float64) {
+// NumLogicalCores returns the number of logical CPU cores (hyperthreads counted).
+func NumLogicalCores() int {
+	n, _ := cpu.Counts(true)
+	return n
+}
+
+// Collect returns (cpu package temperature °C, cpu package power watts, cpu usage %, per-core usage %).
+// Returns 0/nil for values that cannot be read.
+func (c *CPUCollector) Collect() (tempC float64, watts float64, usagePct float64, corePcts []float64) {
 	if c.hwmonTempPath != "" {
 		if v, err := readUint64File(c.hwmonTempPath); err == nil {
 			tempC = float64(v) / 1000.0
@@ -54,6 +67,14 @@ func (c *CPUCollector) Collect() (tempC float64, watts float64) {
 			c.lastEnergy = energy
 			c.lastTime = time.Now()
 		}
+	}
+
+	if pcts, err := cpu.Percent(0, false); err == nil && len(pcts) > 0 {
+		usagePct = pcts[0]
+	}
+
+	if pcts, err := cpu.Percent(0, true); err == nil {
+		corePcts = pcts
 	}
 
 	return

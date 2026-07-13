@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/host"
+	"github.com/shirou/gopsutil/v3/load"
 	"zimaos-monitor/internal/collector"
 	"zimaos-monitor/internal/config"
 	mqttclient "zimaos-monitor/internal/mqtt"
@@ -25,13 +27,19 @@ type zimaosInfo struct {
 }
 
 type metrics struct {
-	CPUTemp        float64               `json:"cpu_temp"`
-	CPUWatts       float64               `json:"cpu_watts"`
-	RAMUsedPct     float64               `json:"ram_used_pct"`
-	RAMAvailableGB float64               `json:"ram_available_gb"`
-	RAMTotalGB     float64               `json:"ram_total_gb"`
+	CPUTemp        float64                        `json:"cpu_temp"`
+	CPUWatts       float64                        `json:"cpu_watts"`
+	CPUUsagePct    float64                        `json:"cpu_usage_pct"`
+	CPUCorePct     []float64                      `json:"cpu_core_pct"`
+	LoadAvg1       float64                        `json:"load_avg_1"`
+	LoadAvg5       float64                        `json:"load_avg_5"`
+	LoadAvg15      float64                        `json:"load_avg_15"`
+	UptimeSeconds  uint64                         `json:"uptime_seconds"`
+	RAMUsedPct     float64                        `json:"ram_used_pct"`
+	RAMAvailableGB float64                        `json:"ram_available_gb"`
+	RAMTotalGB     float64                        `json:"ram_total_gb"`
 	Disks          map[string]collector.DiskStats `json:"disks"`
-	ZimaOS         zimaosInfo            `json:"zimaos"`
+	ZimaOS         zimaosInfo                     `json:"zimaos"`
 }
 
 func main() {
@@ -56,6 +64,9 @@ func main() {
 		log.Printf("auto-discovered %d disk(s)", len(cfg.Disks))
 	}
 
+	numCores := collector.NumLogicalCores()
+	log.Printf("logical cpu cores: %d", numCores)
+
 	cpu, err := collector.NewCPUCollector()
 	if err != nil {
 		log.Printf("warn: cpu collector init: %v", err)
@@ -69,7 +80,7 @@ func main() {
 		}
 		defer client.Disconnect()
 
-		if err := client.PublishDiscovery(cfg.Disks, true); err != nil {
+		if err := client.PublishDiscovery(cfg.Disks, numCores, true); err != nil {
 			log.Printf("warn: publish discovery: %v", err)
 		}
 		log.Printf("connected to %s, publishing every %s", cfg.MQTT.Broker, cfg.Interval)
@@ -90,11 +101,22 @@ func main() {
 	updateTopic := fmt.Sprintf("%s/update", cfg.Device.ID)
 
 	collect := func() {
-		cpuTemp, cpuWatts := cpu.Collect()
+		cpuTemp, cpuWatts, cpuUsagePct, corePcts := cpu.Collect()
 
 		memStats, err := collector.CollectMemory()
 		if err != nil {
 			log.Printf("warn: memory: %v", err)
+		}
+
+		avgStat, err := load.Avg()
+		if err != nil {
+			log.Printf("warn: load avg: %v", err)
+			avgStat = &load.AvgStat{}
+		}
+
+		uptimeSec, err := host.Uptime()
+		if err != nil {
+			log.Printf("warn: uptime: %v", err)
 		}
 
 		zi := zimaosInfo{InstalledVersion: zimaosVersion}
@@ -105,6 +127,12 @@ func main() {
 		m := metrics{
 			CPUTemp:        cpuTemp,
 			CPUWatts:       cpuWatts,
+			CPUUsagePct:    cpuUsagePct,
+			CPUCorePct:     corePcts,
+			LoadAvg1:       avgStat.Load1,
+			LoadAvg5:       avgStat.Load5,
+			LoadAvg15:      avgStat.Load15,
+			UptimeSeconds:  uptimeSec,
 			RAMUsedPct:     memStats.UsedPct,
 			RAMAvailableGB: memStats.AvailableGB,
 			RAMTotalGB:     memStats.TotalGB,
@@ -138,7 +166,7 @@ func main() {
 		discoveryCounter++
 		if discoveryCounter >= 10 {
 			discoveryCounter = 0
-			if err := client.PublishDiscovery(cfg.Disks, false); err != nil {
+			if err := client.PublishDiscovery(cfg.Disks, numCores, false); err != nil {
 				log.Printf("warn: re-publish discovery: %v", err)
 			}
 		}

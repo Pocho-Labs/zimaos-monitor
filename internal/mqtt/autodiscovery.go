@@ -51,7 +51,7 @@ type haUpdate struct {
 // If purgeStale is true (first call on startup), existing retained discovery topics from
 // this publisher that are no longer in the current sensor set are cleared, which prevents
 // duplicate entities when disk names or device IDs change between deployments.
-func (c *Client) PublishDiscovery(disks []config.DiskConfig, purgeStale bool) error {
+func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purgeStale bool) error {
 	model := c.cfg.Device.Model
 	if model == "" {
 		model = "ZimaOS"
@@ -92,6 +92,17 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, purgeStale bool) er
 			Origin:            origin,
 		},
 		{
+			Name:              "CPU Usage",
+			UniqueID:          fmt.Sprintf("%s_cpu_usage_pct", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.cpu_usage_pct | round(1) }}",
+			UnitOfMeasurement: "%",
+			StateClass:        "measurement",
+			Icon:              "mdi:cpu-64-bit",
+			Device:            dev,
+			Origin:            origin,
+		},
+		{
 			Name:              "RAM Used",
 			UniqueID:          fmt.Sprintf("%s_ram_used_pct", c.cfg.Device.ID),
 			StateTopic:        stateTopic,
@@ -113,6 +124,58 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, purgeStale bool) er
 			Device:            dev,
 			Origin:            origin,
 		},
+		{
+			Name:              "RAM Total",
+			UniqueID:          fmt.Sprintf("%s_ram_total_gb", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.ram_total_gb | round(2) }}",
+			UnitOfMeasurement: "GB",
+			StateClass:        "measurement",
+			Icon:              "mdi:memory",
+			Device:            dev,
+			Origin:            origin,
+		},
+		{
+			Name:              "Load Average 1m",
+			UniqueID:          fmt.Sprintf("%s_load_avg_1", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.load_avg_1 | round(2) }}",
+			StateClass:        "measurement",
+			Icon:              "mdi:gauge",
+			Device:            dev,
+			Origin:            origin,
+		},
+		{
+			Name:              "Load Average 5m",
+			UniqueID:          fmt.Sprintf("%s_load_avg_5", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.load_avg_5 | round(2) }}",
+			StateClass:        "measurement",
+			Icon:              "mdi:gauge",
+			Device:            dev,
+			Origin:            origin,
+		},
+		{
+			Name:              "Load Average 15m",
+			UniqueID:          fmt.Sprintf("%s_load_avg_15", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.load_avg_15 | round(2) }}",
+			StateClass:        "measurement",
+			Icon:              "mdi:gauge",
+			Device:            dev,
+			Origin:            origin,
+		},
+		{
+			Name:              "Uptime",
+			UniqueID:          fmt.Sprintf("%s_uptime_seconds", c.cfg.Device.ID),
+			StateTopic:        stateTopic,
+			ValueTemplate:     "{{ value_json.uptime_seconds }}",
+			UnitOfMeasurement: "s",
+			DeviceClass:       "duration",
+			StateClass:        "total_increasing",
+			Device:            dev,
+			Origin:            origin,
+		},
 	}
 
 	for _, d := range disks {
@@ -130,6 +193,28 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, purgeStale bool) er
 				Origin:            origin,
 			},
 			haDiscovery{
+				Name:              fmt.Sprintf("%s Used", d.Name),
+				UniqueID:          fmt.Sprintf("%s_disk_%s_used_gb", c.cfg.Device.ID, key),
+				StateTopic:        stateTopic,
+				ValueTemplate:     fmt.Sprintf("{{ value_json.disks['%s'].used_gb | round(2) }}", key),
+				UnitOfMeasurement: "GB",
+				StateClass:        "measurement",
+				Icon:              "mdi:harddisk",
+				Device:            dev,
+				Origin:            origin,
+			},
+			haDiscovery{
+				Name:              fmt.Sprintf("%s Total", d.Name),
+				UniqueID:          fmt.Sprintf("%s_disk_%s_total_gb", c.cfg.Device.ID, key),
+				StateTopic:        stateTopic,
+				ValueTemplate:     fmt.Sprintf("{{ value_json.disks['%s'].total_gb | round(2) }}", key),
+				UnitOfMeasurement: "GB",
+				StateClass:        "measurement",
+				Icon:              "mdi:harddisk",
+				Device:            dev,
+				Origin:            origin,
+			},
+			haDiscovery{
 				Name:              fmt.Sprintf("%s Free", d.Name),
 				UniqueID:          fmt.Sprintf("%s_disk_%s_free_gb", c.cfg.Device.ID, key),
 				StateTopic:        stateTopic,
@@ -141,6 +226,20 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, purgeStale bool) er
 				Origin:            origin,
 			},
 		)
+	}
+
+	for i := range numCores {
+		sensors = append(sensors, haDiscovery{
+			Name:              fmt.Sprintf("CPU Core %d Usage", i),
+			UniqueID:          fmt.Sprintf("%s_cpu_core_%d_pct", c.cfg.Device.ID, i),
+			StateTopic:        stateTopic,
+			ValueTemplate:     fmt.Sprintf("{{ value_json.cpu_core_pct[%d] | round(1) }}", i),
+			UnitOfMeasurement: "%",
+			StateClass:        "measurement",
+			Icon:              "mdi:cpu-64-bit",
+			Device:            dev,
+			Origin:            origin,
+		})
 	}
 
 	updateEntity := haUpdate{
