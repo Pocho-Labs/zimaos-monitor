@@ -206,16 +206,48 @@ make tidy           # go mod tidy
 
 The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs the systemd unit, and preserves any existing `config.yaml` on upgrade.
 
+### Update command
+
 The first release containing the update command must be installed with one of the methods
-below. Later stable releases can be installed locally with:
+below. After that, update to the latest stable release directly from the ZimaOS host:
 
 ```bash
 sudo /opt/zimaos-monitor/zimaos-monitor update
 ```
 
-The command downloads the exact Linux amd64 release artifact, verifies the SHA-256 digest
-published by GitHub (or the release checksum asset), replaces the binary atomically,
-restarts the service, and restores the previous binary if the service does not become active.
+The command must run as `root`, requires internet access to GitHub, and always targets the
+latest stable release. It does not accept a version argument or provide a force option.
+Development builds such as `dev` or `v0.1.0-3-gabcdef` are considered eligible for an
+update to the latest stable release. If the installed stable version is already current or
+newer, the command exits without changing the installation.
+
+During an update, the command:
+
+1. Fetches the latest stable release metadata from GitHub.
+2. Selects the exact `linux-amd64` release archive.
+3. Downloads the archive and verifies its SHA-256 digest.
+4. Extracts the candidate binary and confirms that its reported version matches the release.
+5. Creates a temporary backup and atomically replaces the current executable.
+6. Restarts `zimaos-monitor.service` and waits for it to become active.
+7. Restores the previous binary and restarts the service if the health check fails.
+
+Only the executable is replaced. The installed `/opt/zimaos-monitor/config.yaml` is not
+modified. A lock prevents two update processes from running at the same time, and update
+installation cannot be triggered through MQTT or Home Assistant.
+
+After a successful update, verify the installed version and service status:
+
+```bash
+/opt/zimaos-monitor/zimaos-monitor --version
+systemctl status zimaos-monitor --no-pager
+```
+
+Update errors are printed directly by the command. To inspect a service startup or rollback
+failure:
+
+```bash
+journalctl -u zimaos-monitor -n 100 --no-pager
+```
 
 ### Option A: Download a release (recommended)
 
