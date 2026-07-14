@@ -26,20 +26,21 @@ type haDevice struct {
 }
 
 type haDiscovery struct {
-	Name              string      `json:"name"`
-	UniqueID          string      `json:"unique_id"`
-	StateTopic        string      `json:"state_topic"`
-	ValueTemplate     string      `json:"value_template"`
-	UnitOfMeasurement string      `json:"unit_of_measurement,omitempty"`
-	DeviceClass       string      `json:"device_class,omitempty"`
-	StateClass        string      `json:"state_class,omitempty"`
-	Icon              string      `json:"icon,omitempty"`
-	Device            haDevice    `json:"device"`
-	Origin            haOrigin    `json:"origin"`
+	Name              string   `json:"name"`
+	UniqueID          string   `json:"unique_id"`
+	StateTopic        string   `json:"state_topic"`
+	ValueTemplate     string   `json:"value_template"`
+	UnitOfMeasurement string   `json:"unit_of_measurement,omitempty"`
+	DeviceClass       string   `json:"device_class,omitempty"`
+	StateClass        string   `json:"state_class,omitempty"`
+	Icon              string   `json:"icon,omitempty"`
+	Device            haDevice `json:"device"`
+	Origin            haOrigin `json:"origin"`
 }
 
 type haUpdate struct {
 	Name        string   `json:"name"`
+	Title       string   `json:"title,omitempty"`
 	UniqueID    string   `json:"unique_id"`
 	StateTopic  string   `json:"state_topic"`
 	DeviceClass string   `json:"device_class"`
@@ -67,6 +68,7 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purge
 	origin := haOrigin{Name: originName}
 	stateTopic := fmt.Sprintf("%s/state", c.cfg.Device.ID)
 	updateTopic := fmt.Sprintf("%s/update", c.cfg.Device.ID)
+	monitorUpdateTopic := fmt.Sprintf("%s/monitor/update", c.cfg.Device.ID)
 
 	sensors := []haDiscovery{
 		{
@@ -136,46 +138,36 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purge
 			Origin:            origin,
 		},
 		{
-			Name:              "Load Average 1m",
-			UniqueID:          fmt.Sprintf("%s_load_avg_1", c.cfg.Device.ID),
-			StateTopic:        stateTopic,
-			ValueTemplate:     "{{ value_json.load_avg_1 | round(2) }}",
-			StateClass:        "measurement",
-			Icon:              "mdi:gauge",
-			Device:            dev,
-			Origin:            origin,
+			Name:          "Load Average 1m",
+			UniqueID:      fmt.Sprintf("%s_load_avg_1", c.cfg.Device.ID),
+			StateTopic:    stateTopic,
+			ValueTemplate: "{{ value_json.load_avg_1 | round(2) }}",
+			StateClass:    "measurement",
+			Icon:          "mdi:gauge",
+			Device:        dev,
+			Origin:        origin,
 		},
 		{
-			Name:              "Load Average 5m",
-			UniqueID:          fmt.Sprintf("%s_load_avg_5", c.cfg.Device.ID),
-			StateTopic:        stateTopic,
-			ValueTemplate:     "{{ value_json.load_avg_5 | round(2) }}",
-			StateClass:        "measurement",
-			Icon:              "mdi:gauge",
-			Device:            dev,
-			Origin:            origin,
+			Name:          "Load Average 5m",
+			UniqueID:      fmt.Sprintf("%s_load_avg_5", c.cfg.Device.ID),
+			StateTopic:    stateTopic,
+			ValueTemplate: "{{ value_json.load_avg_5 | round(2) }}",
+			StateClass:    "measurement",
+			Icon:          "mdi:gauge",
+			Device:        dev,
+			Origin:        origin,
 		},
 		{
-			Name:              "Load Average 15m",
-			UniqueID:          fmt.Sprintf("%s_load_avg_15", c.cfg.Device.ID),
-			StateTopic:        stateTopic,
-			ValueTemplate:     "{{ value_json.load_avg_15 | round(2) }}",
-			StateClass:        "measurement",
-			Icon:              "mdi:gauge",
-			Device:            dev,
-			Origin:            origin,
+			Name:          "Load Average 15m",
+			UniqueID:      fmt.Sprintf("%s_load_avg_15", c.cfg.Device.ID),
+			StateTopic:    stateTopic,
+			ValueTemplate: "{{ value_json.load_avg_15 | round(2) }}",
+			StateClass:    "measurement",
+			Icon:          "mdi:gauge",
+			Device:        dev,
+			Origin:        origin,
 		},
-		{
-			Name:              "Uptime",
-			UniqueID:          fmt.Sprintf("%s_uptime_seconds", c.cfg.Device.ID),
-			StateTopic:        stateTopic,
-			ValueTemplate:     "{{ value_json.uptime_seconds }}",
-			UnitOfMeasurement: "s",
-			DeviceClass:       "duration",
-			StateClass:        "total_increasing",
-			Device:            dev,
-			Origin:            origin,
-		},
+		uptimeDiscovery(c.cfg.Device.ID, stateTopic, dev, origin),
 	}
 
 	for _, d := range disks {
@@ -250,13 +242,17 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purge
 		Device:      dev,
 		Origin:      origin,
 	}
+	monitorUpdateEntity := monitorUpdateDiscovery(c.cfg, monitorUpdateTopic, dev, origin)
 
 	// Build set of desired topics before purging, so we never wipe what we're about to publish.
-	desired := make(map[string]bool, len(sensors)+1)
+	desired := make(map[string]bool, len(sensors)+2)
 	for _, s := range sensors {
 		desired[fmt.Sprintf("homeassistant/sensor/%s/%s/config", c.cfg.Device.ID, s.UniqueID)] = true
 	}
 	desired[fmt.Sprintf("homeassistant/update/%s/zimaos_version/config", c.cfg.Device.ID)] = true
+	if c.cfg.MonitorUpdates.IsEnabled() {
+		desired[fmt.Sprintf("homeassistant/update/%s/zimaos_monitor/config", c.cfg.Device.ID)] = true
+	}
 
 	if purgeStale {
 		c.purgeStaleDiscovery(desired)
@@ -282,7 +278,45 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purge
 		return fmt.Errorf("publish update discovery: %w", err)
 	}
 
+	if c.cfg.MonitorUpdates.IsEnabled() {
+		payload, err = json.Marshal(monitorUpdateEntity)
+		if err != nil {
+			return fmt.Errorf("marshal monitor update discovery: %w", err)
+		}
+		topic = fmt.Sprintf("homeassistant/update/%s/zimaos_monitor/config", c.cfg.Device.ID)
+		if err := c.Publish(topic, payload, true); err != nil {
+			return fmt.Errorf("publish monitor update discovery: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func uptimeDiscovery(deviceID, stateTopic string, device haDevice, origin haOrigin) haDiscovery {
+	return haDiscovery{
+		Name:              "Uptime",
+		UniqueID:          fmt.Sprintf("%s_uptime_seconds", deviceID),
+		StateTopic:        stateTopic,
+		ValueTemplate:     "{{ value_json.uptime_seconds }}",
+		UnitOfMeasurement: "s",
+		DeviceClass:       "duration",
+		StateClass:        "measurement",
+		Device:            device,
+		Origin:            origin,
+	}
+}
+
+func monitorUpdateDiscovery(cfg *config.Config, stateTopic string, device haDevice, origin haOrigin) haUpdate {
+	update := haUpdate{
+		Name:        "zimaos-monitor Update",
+		Title:       "zimaos-monitor",
+		UniqueID:    fmt.Sprintf("%s_zimaos_monitor_update", cfg.Device.ID),
+		StateTopic:  stateTopic,
+		DeviceClass: "firmware",
+		Device:      device,
+		Origin:      origin,
+	}
+	return update
 }
 
 // purgeStaleDiscovery subscribes to all retained homeassistant discovery topics published
