@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
 
 jobs:
   build:
@@ -21,6 +21,9 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Test
+        run: go test ./...
 
       - name: Build (Linux amd64)
         run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" ./cmd/zimaos-monitor

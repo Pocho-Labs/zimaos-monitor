@@ -8,18 +8,40 @@ A Go service for ZimaOS that collects system metrics and publishes them via MQTT
 
 ---
 
-## Published Metrics
+## Home Assistant Entities
 
-| Metric | Source | JSON field |
-|--------|--------|------------|
-| CPU Temperature | `/sys/class/hwmon` (Intel coretemp) | `cpu_temp` (°C) |
-| CPU Power | `/sys/class/powercap` (Intel RAPL) | `cpu_watts` (W) |
-| RAM Used | gopsutil | `ram_used_pct` (%) |
-| RAM Available | gopsutil | `ram_available_gb` (GB) |
-| RAM Total | gopsutil | `ram_total_gb` (GB) |
-| Disk Used % | gopsutil per mount | `disks[name].used_pct` (%) |
-| Disk Free | gopsutil per mount | `disks[name].free_gb` (GB) |
-| ZimaOS Version | `/etc/os-release` + GitHub releases | `zimaos.installed_version` / `zimaos.latest_version` |
+MQTT discovery creates 10 fixed sensors, one sensor per logical CPU core, four sensors per disk, and up to two informational update entities.
+
+### Sensor entities
+
+| Entity | Source | JSON field | Unit |
+|--------|--------|------------|------|
+| CPU Temperature | `/sys/class/hwmon` (Intel coretemp) | `cpu_temp` | `°C` |
+| CPU Power | `/sys/class/powercap` (Intel RAPL) | `cpu_watts` | `W` |
+| CPU Usage | gopsutil | `cpu_usage_pct` | `%` |
+| CPU Core N Usage | gopsutil | `cpu_core_pct[N]` | `%` |
+| RAM Used | gopsutil | `ram_used_pct` | `%` |
+| RAM Available | gopsutil | `ram_available_gb` | `GB` |
+| RAM Total | gopsutil | `ram_total_gb` | `GB` |
+| Load Average 1m | gopsutil | `load_avg_1` | - |
+| Load Average 5m | gopsutil | `load_avg_5` | - |
+| Load Average 15m | gopsutil | `load_avg_15` | - |
+| Uptime | gopsutil | `uptime_seconds` | `s` |
+| `<disk> Used %` | gopsutil per mount | `disks.<disk_key>.used_pct` | `%` |
+| `<disk> Used` | gopsutil per mount | `disks.<disk_key>.used_gb` | `GB` |
+| `<disk> Total` | gopsutil per mount | `disks.<disk_key>.total_gb` | `GB` |
+| `<disk> Free` | gopsutil per mount | `disks.<disk_key>.free_gb` | `GB` |
+
+CPU core indexes start at `0`. For discovery templates, `<disk_key>` is derived from the configured disk name, replacing spaces with underscores.
+
+### Update entities
+
+| Entity | State topic | Payload fields | Installable from Home Assistant |
+|--------|-------------|----------------|---------------------------------|
+| ZimaOS Version | `<device_id>/update` | `installed_version`, `latest_version`, `release_url` | No, informational only |
+| zimaos-monitor Update | `<device_id>/monitor/update` | `installed_version`, `latest_version`, `release_url`, `title` | No, run `zimaos-monitor update` on the device |
+
+`ZimaOS Version` is created when `updates.enabled` is `true`; `zimaos-monitor Update` is created when `monitor_updates.enabled` is `true`.
 
 ---
 
@@ -71,6 +93,18 @@ updates:
   check_interval: 6h  # default 6h; minimum 1h enforced
 ```
 
+### `monitor_updates` section (optional)
+
+Checks stable releases of this project and creates a separate Home Assistant Update entity:
+
+```yaml
+monitor_updates:
+  enabled: true       # default true
+  check_interval: 6h  # default 6h; minimum 1h enforced
+```
+
+This entity is informational only. Updates are started locally from the ZimaOS host.
+
 ---
 
 ## Home Assistant
@@ -82,10 +116,15 @@ Once running, sensors appear automatically under:
 **Settings → Devices & Services → MQTT → Devices → ZimaOS \<hostname\>**
 
 The device card shows:
-- CPU Temperature, CPU Power
-- RAM Used %, RAM Available
-- Per-disk Used % and Free (one entry per `/media/*` mount and `/DATA`)
-- **ZimaOS Version** — a native Update entity showing installed vs. latest stable release, with a link to release notes; appears on **Device Info** when a newer version is available. (Check why not appear on **Settings → System → Updates**)
+- CPU Temperature, CPU Power, total CPU Usage, and per-core CPU Usage
+- Load Average for 1, 5, and 15 minutes
+- RAM Used %, RAM Available, and RAM Total
+- Uptime, exported as seconds and rendered by Home Assistant as a duration
+- Per-disk Used %, Used, Total, and Free (one set per `/media/*` mount and `/DATA`)
+- **ZimaOS Version** — a native informational Update entity showing installed vs. latest stable release, with a link to release notes
+- **zimaos-monitor Update** — shows the installed and latest monitor versions and links to
+  the release notes. It does not accept installation commands from MQTT; update locally with
+  `zimaos-monitor update`.
 
 ![Device page in Home Assistant](screenshots/screenshot-01.png)
 
@@ -105,8 +144,10 @@ Each sensor includes full history tracked by Home Assistant:
 |-------|---------|
 | `<device_id>/state` | JSON payload with all metrics (not retained) |
 | `<device_id>/update` | Flat JSON with `installed_version`, `latest_version`, `release_url` for the HA Update entity (not retained) |
+| `<device_id>/monitor/update` | Monitor update state with installed/latest versions and release URL (not retained) |
 | `homeassistant/sensor/<device_id>/+/config` | HA sensor autodiscovery (retained) |
 | `homeassistant/update/<device_id>/zimaos_version/config` | HA Update entity autodiscovery (retained) |
+| `homeassistant/update/<device_id>/zimaos_monitor/config` | Monitor Update entity autodiscovery (retained) |
 
 On startup, stale retained discovery topics from previous deployments are automatically purged to prevent duplicate sensors in HA.
 
@@ -116,6 +157,12 @@ On startup, stale retained discovery topics from previous deployments are automa
 {
   "cpu_temp": 42.0,
   "cpu_watts": 3.5,
+  "cpu_usage_pct": 18.7,
+  "cpu_core_pct": [12.1, 25.3, 17.8, 19.6],
+  "load_avg_1": 0.42,
+  "load_avg_5": 0.31,
+  "load_avg_15": 0.28,
+  "uptime_seconds": 86400,
   "ram_used_pct": 28.9,
   "ram_available_gb": 11.4,
   "ram_total_gb": 16.0,
@@ -128,6 +175,17 @@ On startup, stale retained discovery topics from previous deployments are automa
     "latest_version": "1.5.4",
     "release_url": "https://github.com/IceWhaleTech/ZimaOS/releases/tag/1.5.4"
   }
+}
+```
+
+The monitor update state is published separately to `<device_id>/monitor/update`:
+
+```json
+{
+  "installed_version": "v0.1.0",
+  "latest_version": "v0.2.0",
+  "release_url": "https://github.com/Pocho-Labs/zimaos-monitor/releases/tag/v0.2.0",
+  "title": "zimaos-monitor"
 }
 ```
 
@@ -147,6 +205,17 @@ make tidy           # go mod tidy
 ## Install on ZimaOS
 
 The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs the systemd unit, and preserves any existing `config.yaml` on upgrade.
+
+The first release containing the update command must be installed with one of the methods
+below. Later stable releases can be installed locally with:
+
+```bash
+sudo /opt/zimaos-monitor/zimaos-monitor update
+```
+
+The command downloads the exact Linux amd64 release artifact, verifies the SHA-256 digest
+published by GitHub (or the release checksum asset), replaces the binary atomically,
+restarts the service, and restores the previous binary if the service does not become active.
 
 ### Option A: Download a release (recommended)
 
@@ -175,9 +244,11 @@ On **upgrade**, `config.yaml` is preserved and the service restarts automaticall
 
 ```bash
 # On your dev machine:
+cp config.example.yaml config.yaml
+# Edit config.yaml with the target broker settings.
 make build-linux
 scp bin/zimaos-monitor-linux-amd64 \
-    config.example.yaml \
+    config.yaml \
     systemd/zimaos-monitor.service \
     scripts/install.sh \
     <user>@<zima-host>:/tmp/
@@ -203,6 +274,11 @@ sudo systemctl daemon-reload
 - **Disk discovery** only includes `/media/*` mounts and `/DATA` (mapped to `ZimaOS-HD`), matching exactly what the ZimaOS UI shows.
 - **HA autodiscovery** is published with `retained: true` and re-published every 10 intervals to survive HA restarts. Stale topics from prior deployments are purged on startup.
 - **Update check** queries `https://api.github.com/repos/IceWhaleTech/ZimaOS/releases` and filters out `-alpha`/`-beta`/`-rc` tags (the repo marks all releases as non-prerelease). Rate limit: 60 req/h unauthenticated — well within the 6 h default interval.
+- **Monitor update check** queries the latest stable release from
+  `Pocho-Labs/zimaos-monitor`. The local update command requires the exact amd64 tarball
+  and either GitHub's SHA-256 asset digest or the workflow-generated `.sha256` asset.
+- **Uptime** is sent as an integer number of seconds with Home Assistant device class
+  `duration`, unit `s`, and state class `measurement`.
 
 ---
 

@@ -35,12 +35,18 @@ type UpdatesConfig struct {
 	CheckInterval time.Duration `yaml:"check_interval"`
 }
 
+type MonitorUpdatesConfig struct {
+	Enabled       *bool         `yaml:"enabled"`
+	CheckInterval time.Duration `yaml:"check_interval"`
+}
+
 type Config struct {
-	MQTT     MQTTConfig    `yaml:"mqtt"`
-	Device   DeviceConfig  `yaml:"device"`
-	Interval time.Duration `yaml:"interval"`
-	Disks    []DiskConfig  `yaml:"disks"`
-	Updates  UpdatesConfig `yaml:"updates"`
+	MQTT           MQTTConfig           `yaml:"mqtt"`
+	Device         DeviceConfig         `yaml:"device"`
+	Interval       time.Duration        `yaml:"interval"`
+	Disks          []DiskConfig         `yaml:"disks"`
+	Updates        UpdatesConfig        `yaml:"updates"`
+	MonitorUpdates MonitorUpdatesConfig `yaml:"monitor_updates"`
 }
 
 func Load(path string) (*Config, error) {
@@ -67,6 +73,13 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Updates.CheckInterval == 0 {
 		cfg.Updates.CheckInterval = 6 * time.Hour
+	}
+	if cfg.MonitorUpdates.Enabled == nil {
+		t := true
+		cfg.MonitorUpdates.Enabled = &t
+	}
+	if cfg.MonitorUpdates.CheckInterval == 0 {
+		cfg.MonitorUpdates.CheckInterval = 6 * time.Hour
 	}
 
 	host := hostname()
@@ -95,6 +108,10 @@ func Load(path string) (*Config, error) {
 }
 
 func (u UpdatesConfig) IsEnabled() bool {
+	return u.Enabled == nil || *u.Enabled
+}
+
+func (u MonitorUpdatesConfig) IsEnabled() bool {
 	return u.Enabled == nil || *u.Enabled
 }
 
