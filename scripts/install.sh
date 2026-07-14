@@ -35,18 +35,20 @@ else
     exit 1
 fi
 
-if [ ! -f "$SRC_DIR/config.example.yaml" ]; then
-    echo "ERROR: config.example.yaml not found in $SRC_DIR" >&2
+if [ ! -f "$SRC_DIR/config.yaml" ]; then
+    echo "ERROR: config.yaml not found in $SRC_DIR" >&2
     exit 1
 fi
 
 install -d "$INSTALL_DIR"
 install -m755 "$BIN_SRC" "$INSTALL_DIR/zimaos-monitor"
 install -m644 "$UNIT_SRC" "$SYSTEMD_DIR/$UNIT"
+# Remove the transient updater unit shipped by pre-release development builds.
+rm -f "$SYSTEMD_DIR/zimaos-monitor-update.service"
 
 FIRST_INSTALL=0
 if [ ! -f "$INSTALL_DIR/config.yaml" ]; then
-    install -m644 "$SRC_DIR/config.example.yaml" "$INSTALL_DIR/config.yaml"
+    install -m644 "$SRC_DIR/config.yaml" "$INSTALL_DIR/config.yaml"
     FIRST_INSTALL=1
 fi
 

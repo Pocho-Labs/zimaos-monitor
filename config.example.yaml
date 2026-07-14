@@ -41,3 +41,10 @@ interval: 30s
 # updates:
 #   enabled: true        # default true; set false to skip the GitHub check
 #   check_interval: 6h   # default 6h; minimum 1h enforced
+
+# monitor_updates: (optional) — check this project's stable GitHub releases.
+# The Home Assistant Update entity is informational only.
+#
+# monitor_updates:
+#   enabled: true       # default true
+#   check_interval: 6h  # default 6h; minimum 1h enforced
