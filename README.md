@@ -197,6 +197,7 @@ The monitor update state is published separately to `<device_id>/monitor/update`
 make build          # build for current platform
 make build-linux    # cross-compile for Linux x86_64 (ZimaOS)
 make run-dry        # run locally without MQTT, prints JSON to stdout
+make test           # Go tests + installer syntax and PTY integration tests
 make tidy           # go mod tidy
 ```
 
@@ -204,7 +205,38 @@ make tidy           # go mod tidy
 
 ## Install on ZimaOS
 
-The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs the systemd unit, and preserves any existing `config.yaml` on upgrade.
+The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs
+the systemd unit, and guides first-time MQTT configuration. Run it from an interactive SSH
+terminal as `root`.
+
+On first install it asks:
+
+| Question | Required | Default |
+|----------|----------|---------|
+| MQTT broker host | Yes | None |
+| MQTT broker port | No | `1883` |
+| MQTT username | No | Empty |
+| MQTT password | No | Empty |
+
+The password is entered with terminal echo disabled and is never included in the confirmation
+summary. All other settings retain their documented defaults: client ID `zimaos-monitor`,
+30-second publishing, automatic device and disk detection, and update checks every six hours.
+After a redacted confirmation, the installer writes
+`/opt/zimaos-monitor/config.yaml` as a root-only file, enables the service, starts it, and
+verifies that it is active.
+
+First installation stops before changing active files when no terminal is available, input ends,
+or confirmation is declined. Rerunning the installer with an existing configuration skips all
+questions, preserves its contents, installs new release assets, and restarts the service.
+
+The binary also exposes the configuration-only command used by the installer:
+
+```bash
+zimaos-monitor setup --output /path/to/new-config.yaml
+```
+
+It requires a terminal, refuses to replace an existing path, and does not contact MQTT, collect
+metrics, or operate systemd. Use `install.sh` for the complete supported installation lifecycle.
 
 ### Update command
 
@@ -262,27 +294,27 @@ cd zimaos-monitor-*-linux-amd64
 sudo ./install.sh
 ```
 
-On **first install** the service is enabled but not started — edit the config first:
+On first install, answer the MQTT questions and confirm the displayed settings. The service starts
+immediately. On upgrade, `config.yaml` is preserved and no questions are asked.
+
+If startup fails, the validated configuration remains available for correction:
 
 ```bash
+sudo systemctl status zimaos-monitor.service --no-pager
+sudo journalctl -u zimaos-monitor.service -n 100 --no-pager
 sudo nano /opt/zimaos-monitor/config.yaml
-sudo systemctl start zimaos-monitor
-sudo journalctl -u zimaos-monitor -f
+sudo systemctl restart zimaos-monitor.service
 ```
-
-On **upgrade**, `config.yaml` is preserved and the service restarts automatically.
 
 ### Option B: Deploy a local build (development)
 
 ```bash
 # On your dev machine:
-cp config.example.yaml config.yaml
-# Edit config.yaml with the target broker settings.
 make build-linux
 scp bin/zimaos-monitor-linux-amd64 \
-    config.yaml \
     systemd/zimaos-monitor.service \
     scripts/install.sh \
+    config.example.yaml \
     <user>@<zima-host>:/tmp/
 
 # On the ZimaOS device:
@@ -328,7 +360,7 @@ If you find this project useful, consider subscribing to my YouTube channel or f
 1. Fork the repository
 2. Create a branch: `git checkout -b feature/my-change`
 3. Copy `config.example.yaml` → `config.yaml` and configure your device
-4. Test with `make run-dry`
+4. Test with `make test` and `make run-dry`
 5. Open a pull request
 
 ## License

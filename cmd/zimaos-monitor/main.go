@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"zimaos-monitor/internal/config"
 	mqttclient "zimaos-monitor/internal/mqtt"
 	"zimaos-monitor/internal/selfupdate"
+	"zimaos-monitor/internal/setup"
 )
 
 var version = "dev"
@@ -53,6 +55,10 @@ type metrics struct {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "update" {
 		runUpdate(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		runSetup(os.Args[2:])
 		return
 	}
 
@@ -243,6 +249,27 @@ func main() {
 			log.Printf("received %s, shutting down", sig)
 			return
 		}
+	}
+}
+
+func runSetup(args []string) {
+	flags := flag.NewFlagSet("setup", flag.ExitOnError)
+	output := flags.String("output", "", "write the generated configuration to this new file")
+	if err := flags.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if flags.NArg() != 0 {
+		log.Fatal("setup does not accept positional arguments")
+	}
+	if *output == "" {
+		log.Fatal("setup requires --output PATH")
+	}
+	if err := setup.Run(*output); err != nil {
+		if errors.Is(err, setup.ErrCancelled) {
+			fmt.Println("Setup cancelled; no changes made.")
+			return
+		}
+		log.Fatalf("setup: %v", err)
 	}
 }
 

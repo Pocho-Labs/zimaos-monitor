@@ -2,6 +2,7 @@
 Description=ZimaOS Hardware Monitor (MQTT publisher)
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/opt/zimaos-monitor/config.yaml
 
 [Service]
 Type=simple

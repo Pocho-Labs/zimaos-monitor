@@ -23,7 +23,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: make test
 
       - name: Build (Linux amd64)
-        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" ./cmd/zimaos-monitor
+        run: make build-linux

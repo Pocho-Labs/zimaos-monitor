@@ -60,7 +60,7 @@ jobs:
           fi
 
       - name: Test
-        run: go test ./...
+        run: make test
 
       - name: Build Linux amd64
         env:
@@ -82,12 +82,28 @@ jobs:
         run: |
           STAGING="zimaos-monitor-${VERSION}-linux-amd64"
           mkdir -p "${STAGING}"
-          cp bin/zimaos-monitor "${STAGING}/"
-          cp config.example.yaml "${STAGING}/config.yaml"
-          cp systemd/zimaos-monitor.service "${STAGING}/"
+          install -m755 bin/zimaos-monitor "${STAGING}/zimaos-monitor"
+          install -m644 config.example.yaml "${STAGING}/config.example.yaml"
+          install -m644 systemd/zimaos-monitor.service "${STAGING}/zimaos-monitor.service"
           install -m755 scripts/install.sh "${STAGING}/"
           tar -czf "${STAGING}.tar.gz" "${STAGING}"
           sha256sum "${STAGING}.tar.gz" > "${STAGING}.tar.gz.sha256"
+
+      - name: Verify release archive
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          STAGING="zimaos-monitor-${VERSION}-linux-amd64"
+          test -x "${STAGING}/zimaos-monitor"
+          test -x "${STAGING}/install.sh"
+          test -f "${STAGING}/zimaos-monitor.service"
+          test -f "${STAGING}/config.example.yaml"
+          test ! -e "${STAGING}/config.yaml"
+          test "$(stat -c '%a' "${STAGING}/zimaos-monitor")" = "755"
+          test "$(stat -c '%a' "${STAGING}/install.sh")" = "755"
+          test "$(stat -c '%a' "${STAGING}/zimaos-monitor.service")" = "644"
+          test "$(stat -c '%a' "${STAGING}/config.example.yaml")" = "644"
+          tar -tzf "${STAGING}.tar.gz" | grep -Fx "${STAGING}/config.example.yaml"
 
       - name: Detect pre-release
         id: prerelease

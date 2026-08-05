@@ -1,3 +1,6 @@
+# Reference configuration for manual customization and recovery.
+# The interactive installer generates a minimal root-only config.yaml and does
+# not copy this file. Keep real broker credentials only on the ZimaOS host.
 mqtt:
   broker: "tcp://YOUR_MQTT_BROKER_IP:1883"
   username: ""

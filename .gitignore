@@ -1,2 +1,12 @@
 bin/
 config.yaml
+*.exe
+*.test
+*.out
+vendor/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
