@@ -3,7 +3,7 @@ CMD     := ./cmd/zimaos-monitor
 BIN_DIR := bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-.PHONY: all build build-linux run-dry test test-install tidy clean
+.PHONY: all build build-linux run-dry test test-install test-integration tidy clean
 
 all: build
 
@@ -26,6 +26,10 @@ test:
 test-install:
 	sh -n scripts/install.sh
 	python3 scripts/install_test.py
+
+test-integration:
+	@if [ -z "$(MQTT_TEST_BROKER)" ]; then echo "MQTT_TEST_BROKER is required (for example tcp://127.0.0.1:18883)" >&2; exit 1; fi
+	MQTT_TEST_BROKER="$(MQTT_TEST_BROKER)" go test -count=1 ./internal/mqtt -run 'TestTwoSimultaneousInstallations|TestScopedDiscoveryCleanup'
 
 tidy:
 	go mod tidy

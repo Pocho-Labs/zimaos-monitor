@@ -179,7 +179,7 @@ func (r *Runner) printSummary(answers Answers) {
 	r.console.Printf("  Broker: %s\n", brokerURI(answers.BrokerHost, answers.BrokerPort))
 	r.console.Printf("  Username: %s\n", username)
 	r.console.Printf("  Password: %s\n", password)
-	r.console.Printf("  Client ID: zimaos-monitor\n")
+	r.console.Printf("  Client and device IDs: derived per machine at startup\n")
 	r.console.Printf("  Publish interval: 30s\n")
 	r.console.Printf("  Device and disks: auto-detected\n")
 	r.console.Printf("  Update checks: enabled (6h intervals)\n\n")

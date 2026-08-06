@@ -47,9 +47,16 @@ type Config struct {
 	Disks          []DiskConfig         `yaml:"disks"`
 	Updates        UpdatesConfig        `yaml:"updates"`
 	MonitorUpdates MonitorUpdatesConfig `yaml:"monitor_updates"`
+	Identity       IdentityStatus       `yaml:"-"`
 }
 
 func Load(path string) (*Config, error) {
+	return LoadWithIdentitySource(path, osIdentitySource{})
+}
+
+// LoadWithIdentitySource loads configuration using source for automatic host identities.
+// Callers normally use Load; the injected source keeps machine identity behavior testable.
+func LoadWithIdentitySource(path string, source IdentitySource) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open config %s: %w", path, err)
@@ -63,9 +70,6 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Interval == 0 {
 		cfg.Interval = 30 * time.Second
-	}
-	if cfg.MQTT.ClientID == "" {
-		cfg.MQTT.ClientID = "zimaos-monitor"
 	}
 	if cfg.Updates.Enabled == nil {
 		t := true
@@ -82,12 +86,62 @@ func Load(path string) (*Config, error) {
 		cfg.MonitorUpdates.CheckInterval = 6 * time.Hour
 	}
 
-	host := hostname()
-
-	if cfg.Device.ID == "" {
-		machineID := readMachineID()
-		cfg.Device.ID = deriveDeviceID(host, machineID)
+	clientAutomatic := cfg.MQTT.ClientID == ""
+	deviceAutomatic := cfg.Device.ID == ""
+	if clientAutomatic {
+		cfg.Identity.ClientIDProvenance = IdentityAutomatic
+	} else {
+		cfg.Identity.ClientIDProvenance = IdentityExplicit
 	}
+	if deviceAutomatic {
+		cfg.Identity.DeviceIDProvenance = IdentityAutomatic
+	} else {
+		cfg.Identity.DeviceIDProvenance = IdentityExplicit
+	}
+
+	if clientAutomatic || deviceAutomatic {
+		machineID, err := canonicalMachineID(source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve automatic identity: %w", err)
+		}
+		if clientAutomatic {
+			cfg.MQTT.ClientID = deriveClientID(machineID)
+			cfg.Identity.Warnings = append(cfg.Identity.Warnings,
+				fmt.Sprintf(
+					"mqtt.client_id was omitted; using machine-specific automatic ID %q, replacing the shared legacy default on upgrade",
+					cfg.MQTT.ClientID,
+				),
+			)
+		}
+		if deviceAutomatic {
+			cfg.Device.ID = deriveDeviceID(machineID)
+			cfg.Identity.Warnings = append(cfg.Identity.Warnings,
+				fmt.Sprintf(
+					"device.id was omitted; using machine-specific automatic ID %q; a legacy Home Assistant device may require manual cleanup after upgrade",
+					cfg.Device.ID,
+				),
+			)
+		}
+	}
+	if !clientAutomatic && cfg.MQTT.ClientID == "zimaos-monitor" {
+		cfg.Identity.Warnings = append(cfg.Identity.Warnings,
+			`mqtt.client_id "zimaos-monitor" is a shared legacy value; configure a unique override or omit it for a machine-specific automatic ID`,
+		)
+	}
+	if !deviceAutomatic && !safeDiscoveryDeviceID(cfg.Device.ID) {
+		cfg.Identity.Warnings = append(cfg.Identity.Warnings,
+			fmt.Sprintf(
+				"device.id %q is unsafe for scoped Home Assistant discovery cleanup; cleanup will be skipped until it is changed",
+				cfg.Device.ID,
+			),
+		)
+	}
+
+	host := ""
+	if source != nil {
+		host, _ = source.Hostname()
+	}
+	host = strings.TrimSpace(host)
 	if cfg.Device.Name == "" {
 		if host != "" && host != "localhost" {
 			cfg.Device.Name = "ZimaOS " + host
@@ -130,42 +184,4 @@ func readDMI(paths ...string) string {
 		return s
 	}
 	return ""
-}
-
-func hostname() string {
-	h, _ := os.Hostname()
-	return strings.TrimSpace(h)
-}
-
-func readMachineID() string {
-	b, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-func deriveDeviceID(host, machineID string) string {
-	if host != "" && host != "localhost" {
-		return sanitizeID(host)
-	}
-	if len(machineID) >= 8 {
-		return "zimaos_" + machineID[:8]
-	}
-	return "zimaos_monitor"
-}
-
-func sanitizeID(s string) string {
-	s = strings.ToLower(s)
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
 }

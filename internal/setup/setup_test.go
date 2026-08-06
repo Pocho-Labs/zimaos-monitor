@@ -113,6 +113,17 @@ func TestRunnerDefaultConfiguration(t *testing.T) {
 	if !strings.Contains(console.output.String(), "Password: not configured") {
 		t.Fatalf("summary missing redacted password status: %s", console.output.String())
 	}
+	output := console.output.String()
+	if strings.Contains(output, "Client ID: zimaos-monitor") {
+		t.Fatalf("summary still advertises shared Client ID: %s", output)
+	}
+	if !strings.Contains(output, "Client and device IDs: derived per machine at startup") {
+		t.Fatalf("summary missing machine-specific identity guidance: %s", output)
+	}
+	if strings.Contains(string(files.data), "client_id:") ||
+		strings.Contains(string(files.data), "device:") {
+		t.Fatalf("generated YAML must omit runtime identity fields:\n%s", files.data)
+	}
 }
 
 func TestRunnerCancellationAndPreconditions(t *testing.T) {

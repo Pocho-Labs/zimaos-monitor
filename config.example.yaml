@@ -5,18 +5,18 @@ mqtt:
   broker: "tcp://YOUR_MQTT_BROKER_IP:1883"
   username: ""
   password: ""
-  client_id: "zimaos-monitor"
+  # client_id: "unique-explicit-client"  # optional; omitted → machine-specific zm-<20 chars>
 
 # device: (optional) — all fields auto-detected at startup:
-#   id            → derived from /etc/hostname (sanitized), fallback to machine-id prefix
+#   id            → privacy-safe machine-specific zimaos_<20 chars>
 #   name          → "ZimaOS <hostname>"
-#   serial_number → /etc/machine-id
+#   serial_number → DMI product/board serial when available
 #   manufacturer  → "Pocho Labs"
 # Uncomment any field below to override the auto-detected value.
 #
 # device:
 #   name: "ZimaOS Monitor"
-#   id: "zimaos_monitor"     # MQTT topic prefix + HA unique_id prefix
+#   id: "unique_zimaos_monitor" # optional MQTT topic + HA unique_id prefix; must be unique
 #   model: "ZimaBoard"       # ZimaBoard / ZimaBlade / ZimaCube
 #   manufacturer: "Pocho Labs"
 #   serial_number: ""        # leave empty to use /etc/machine-id

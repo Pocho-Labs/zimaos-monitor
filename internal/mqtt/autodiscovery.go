@@ -10,7 +10,13 @@ import (
 	"zimaos-monitor/internal/config"
 )
 
-const originName = "zimaos-monitor"
+const (
+	originName              = "zimaos-monitor"
+	ZimaOSUpdateTitle       = "ZimaOS Operating System"
+	MonitorUpdateTitle      = "zimaos-monitor"
+	zimaOSUpdateEntityName  = "ZimaOS Operating System Update"
+	monitorUpdateEntityName = "zimaos-monitor Update"
+)
 
 type haOrigin struct {
 	Name string `json:"name"`
@@ -234,14 +240,7 @@ func (c *Client) PublishDiscovery(disks []config.DiskConfig, numCores int, purge
 		})
 	}
 
-	updateEntity := haUpdate{
-		Name:        "ZimaOS Version",
-		UniqueID:    fmt.Sprintf("%s_zimaos_update", c.cfg.Device.ID),
-		StateTopic:  updateTopic,
-		DeviceClass: "firmware",
-		Device:      dev,
-		Origin:      origin,
-	}
+	updateEntity := zimaOSUpdateDiscovery(c.cfg, updateTopic, dev, origin)
 	monitorUpdateEntity := monitorUpdateDiscovery(c.cfg, monitorUpdateTopic, dev, origin)
 
 	// Build set of desired topics before purging, so we never wipe what we're about to publish.
@@ -306,10 +305,22 @@ func uptimeDiscovery(deviceID, stateTopic string, device haDevice, origin haOrig
 	}
 }
 
+func zimaOSUpdateDiscovery(cfg *config.Config, stateTopic string, device haDevice, origin haOrigin) haUpdate {
+	return haUpdate{
+		Name:        zimaOSUpdateEntityName,
+		Title:       ZimaOSUpdateTitle,
+		UniqueID:    fmt.Sprintf("%s_zimaos_update", cfg.Device.ID),
+		StateTopic:  stateTopic,
+		DeviceClass: "firmware",
+		Device:      device,
+		Origin:      origin,
+	}
+}
+
 func monitorUpdateDiscovery(cfg *config.Config, stateTopic string, device haDevice, origin haOrigin) haUpdate {
 	update := haUpdate{
-		Name:        "zimaos-monitor Update",
-		Title:       "zimaos-monitor",
+		Name:        monitorUpdateEntityName,
+		Title:       MonitorUpdateTitle,
 		UniqueID:    fmt.Sprintf("%s_zimaos_monitor_update", cfg.Device.ID),
 		StateTopic:  stateTopic,
 		DeviceClass: "firmware",
@@ -319,31 +330,95 @@ func monitorUpdateDiscovery(cfg *config.Config, stateTopic string, device haDevi
 	return update
 }
 
-// purgeStaleDiscovery subscribes to all retained homeassistant discovery topics published
-// by us (detected via origin.name == "zimaos-monitor"), waits 2s for retained delivery,
-// then clears any that are not in `desired`.
+type discoveryCleanupPlan struct {
+	staleTopics     []string
+	ambiguousTopics []string
+}
+
+func discoveryTopicFilter(deviceID string) (string, error) {
+	if deviceID == "" || strings.ContainsAny(deviceID, "/+#\x00") {
+		return "", fmt.Errorf("device id %q is not one safe MQTT topic level", deviceID)
+	}
+	return fmt.Sprintf("homeassistant/+/%s/+/config", deviceID), nil
+}
+
+func parseDiscoveryTopic(topic string) (component, nodeID, objectID string, ok bool) {
+	levels := strings.Split(topic, "/")
+	if len(levels) != 5 ||
+		levels[0] != "homeassistant" ||
+		levels[1] == "" ||
+		levels[2] == "" ||
+		levels[3] == "" ||
+		levels[4] != "config" {
+		return "", "", "", false
+	}
+	return levels[1], levels[2], levels[3], true
+}
+
+func planDiscoveryCleanup(
+	collected map[string][]byte,
+	desired map[string]bool,
+	deviceID string,
+) discoveryCleanupPlan {
+	plan := discoveryCleanupPlan{}
+	for topic, payload := range collected {
+		_, nodeID, _, ok := parseDiscoveryTopic(topic)
+		if !ok {
+			plan.ambiguousTopics = append(plan.ambiguousTopics, topic)
+			continue
+		}
+		if nodeID != deviceID || len(payload) == 0 {
+			continue
+		}
+		if desired[topic] {
+			continue
+		}
+		var probe struct {
+			Origin haOrigin `json:"origin"`
+			Device haDevice `json:"device"`
+		}
+		if err := json.Unmarshal(payload, &probe); err != nil {
+			plan.ambiguousTopics = append(plan.ambiguousTopics, topic)
+			continue
+		}
+		owned := probe.Origin.Name == originName
+		if owned {
+			owned = false
+			for _, identifier := range probe.Device.Identifiers {
+				if identifier == deviceID {
+					owned = true
+					break
+				}
+			}
+		}
+		if !owned {
+			plan.ambiguousTopics = append(plan.ambiguousTopics, topic)
+			continue
+		}
+		plan.staleTopics = append(plan.staleTopics, topic)
+	}
+	return plan
+}
+
+// purgeStaleDiscovery clears only retained discovery records whose topic and payload
+// both prove ownership by the current effective device.
 func (c *Client) purgeStaleDiscovery(desired map[string]bool) {
-	collected, err := c.CollectRetained("homeassistant/+/+/+/config", 2*time.Second)
+	filter, err := discoveryTopicFilter(c.cfg.Device.ID)
+	if err != nil {
+		log.Printf("warn: skipping stale discovery cleanup: %v; configure a device.id without '/', '+', or '#'", err)
+		return
+	}
+	collected, err := c.CollectRetained(filter, 2*time.Second)
 	if err != nil {
 		log.Printf("warn: purge discovery scan: %v", err)
 		return
 	}
 
-	for topic, payload := range collected {
-		if desired[topic] || len(payload) == 0 {
-			continue
-		}
-		var probe struct {
-			Origin struct {
-				Name string `json:"name"`
-			} `json:"origin"`
-		}
-		if err := json.Unmarshal(payload, &probe); err != nil {
-			continue
-		}
-		if probe.Origin.Name != originName {
-			continue
-		}
+	plan := planDiscoveryCleanup(collected, desired, c.cfg.Device.ID)
+	for _, topic := range plan.ambiguousTopics {
+		log.Printf("warn: preserving ambiguous discovery topic %s", topic)
+	}
+	for _, topic := range plan.staleTopics {
 		log.Printf("mqtt: purging stale discovery topic %s", topic)
 		if err := c.Publish(topic, nil, true); err != nil {
 			log.Printf("warn: purge %s: %v", topic, err)
