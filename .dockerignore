@@ -1,0 +1,13 @@
+.git/
+.github/
+.dockerignore
+Dockerfile*
+bin/
+coverage/
+*.log*
+.env*
+config.yaml
+*.tmp
+*.swp
+.vscode/
+.idea/

@@ -88,27 +88,63 @@ func (c *Client) CollectRetained(topicFilter string, timeout time.Duration) (map
 
 	collected := make(map[string][]byte)
 	var mu sync.Mutex
-
-	// Timer starts at full timeout (no-messages case); each incoming message resets it
-	// to idleGrace so we stop shortly after the retained burst finishes.
-	timer := time.NewTimer(timeout)
+	activity := make(chan struct{}, 1)
+	totalTimer := time.NewTimer(timeout)
+	defer totalTimer.Stop()
 
 	handler := func(_ paho.Client, msg paho.Message) {
+		if !msg.Retained() {
+			return
+		}
+		payload := append([]byte(nil), msg.Payload()...)
 		mu.Lock()
-		collected[msg.Topic()] = msg.Payload()
+		collected[msg.Topic()] = payload
 		mu.Unlock()
-		timer.Reset(idleGrace)
+		select {
+		case activity <- struct{}{}:
+		default:
+		}
 	}
 
 	token := c.inner.Subscribe(topicFilter, 0, handler)
 	token.Wait()
 	if err := token.Error(); err != nil {
-		timer.Stop()
 		return nil, fmt.Errorf("subscribe %s: %w", topicFilter, err)
 	}
 
-	<-timer.C
-	c.inner.Unsubscribe(topicFilter).Wait()
+	var idleTimer *time.Timer
+	var idle <-chan time.Time
+collect:
+	for {
+		select {
+		case <-totalTimer.C:
+			break collect
+		case <-activity:
+			if idleTimer == nil {
+				idleTimer = time.NewTimer(idleGrace)
+				idle = idleTimer.C
+				continue
+			}
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(idleGrace)
+		case <-idle:
+			break collect
+		}
+	}
+	if idleTimer != nil {
+		idleTimer.Stop()
+	}
+
+	unsubscribe := c.inner.Unsubscribe(topicFilter)
+	unsubscribe.Wait()
+	if err := unsubscribe.Error(); err != nil {
+		return nil, fmt.Errorf("unsubscribe %s: %w", topicFilter, err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

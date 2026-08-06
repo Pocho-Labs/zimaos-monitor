@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"zimaos-monitor/internal/config"
 	mqttclient "zimaos-monitor/internal/mqtt"
 	"zimaos-monitor/internal/selfupdate"
+	"zimaos-monitor/internal/setup"
 )
 
 var version = "dev"
@@ -25,6 +27,7 @@ type zimaosInfo struct {
 	InstalledVersion string `json:"installed_version"`
 	LatestVersion    string `json:"latest_version,omitempty"`
 	ReleaseURL       string `json:"release_url,omitempty"`
+	Title            string `json:"title"`
 }
 
 type monitorUpdateInfo struct {
@@ -32,6 +35,24 @@ type monitorUpdateInfo struct {
 	LatestVersion    string `json:"latest_version,omitempty"`
 	ReleaseURL       string `json:"release_url,omitempty"`
 	Title            string `json:"title"`
+}
+
+func newZimaOSUpdateInfo(installedVersion, latestVersion, releaseURL string) zimaosInfo {
+	return zimaosInfo{
+		InstalledVersion: installedVersion,
+		LatestVersion:    latestVersion,
+		ReleaseURL:       releaseURL,
+		Title:            mqttclient.ZimaOSUpdateTitle,
+	}
+}
+
+func newMonitorUpdateInfo(installedVersion, latestVersion, releaseURL string) monitorUpdateInfo {
+	return monitorUpdateInfo{
+		InstalledVersion: installedVersion,
+		LatestVersion:    latestVersion,
+		ReleaseURL:       releaseURL,
+		Title:            mqttclient.MonitorUpdateTitle,
+	}
 }
 
 type metrics struct {
@@ -55,6 +76,10 @@ func main() {
 		runUpdate(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		runSetup(os.Args[2:])
+		return
+	}
 
 	cfgPath := flag.String("config", "config.yaml", "path to config file")
 	dryRun := flag.Bool("dry-run", false, "print metrics to stdout without publishing to MQTT")
@@ -71,6 +96,9 @@ func main() {
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	for _, warning := range cfg.Identity.Warnings {
+		log.Printf("warn: identity: %s", warning)
 	}
 	zimaosVersion := collector.ZimaOSVersion()
 	log.Printf("zimaos version: %q", zimaosVersion)
@@ -128,10 +156,7 @@ func main() {
 	monitorUpdateTopic := fmt.Sprintf("%s/monitor/update", cfg.Device.ID)
 
 	monitorState := func() monitorUpdateInfo {
-		info := monitorUpdateInfo{
-			InstalledVersion: version,
-			Title:            "zimaos-monitor",
-		}
+		info := newMonitorUpdateInfo(version, "", "")
 		if monitorChecker != nil {
 			release := monitorChecker.Latest()
 			info.LatestVersion = release.Version
@@ -172,7 +197,7 @@ func main() {
 			log.Printf("warn: uptime: %v", err)
 		}
 
-		zi := zimaosInfo{InstalledVersion: zimaosVersion}
+		zi := newZimaOSUpdateInfo(zimaosVersion, "", "")
 		if upstream != nil {
 			zi.LatestVersion, zi.ReleaseURL = upstream.Latest()
 		}
@@ -243,6 +268,27 @@ func main() {
 			log.Printf("received %s, shutting down", sig)
 			return
 		}
+	}
+}
+
+func runSetup(args []string) {
+	flags := flag.NewFlagSet("setup", flag.ExitOnError)
+	output := flags.String("output", "", "write the generated configuration to this new file")
+	if err := flags.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if flags.NArg() != 0 {
+		log.Fatal("setup does not accept positional arguments")
+	}
+	if *output == "" {
+		log.Fatal("setup requires --output PATH")
+	}
+	if err := setup.Run(*output); err != nil {
+		if errors.Is(err, setup.ErrCancelled) {
+			fmt.Println("Setup cancelled; no changes made.")
+			return
+		}
+		log.Fatalf("setup: %v", err)
 	}
 }
 
