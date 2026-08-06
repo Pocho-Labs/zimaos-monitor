@@ -38,10 +38,13 @@ CPU core indexes start at `0`. For discovery templates, `<disk_key>` is derived 
 
 | Entity | State topic | Payload fields | Installable from Home Assistant |
 |--------|-------------|----------------|---------------------------------|
-| ZimaOS Version | `<device_id>/update` | `installed_version`, `latest_version`, `release_url` | No, informational only |
+| ZimaOS Operating System Update | `<device_id>/update` | `installed_version`, `latest_version`, `release_url`, `title` | No, use the ZimaOS update interface |
 | zimaos-monitor Update | `<device_id>/monitor/update` | `installed_version`, `latest_version`, `release_url`, `title` | No, run `zimaos-monitor update` on the device |
 
-`ZimaOS Version` is created when `updates.enabled` is `true`; `zimaos-monitor Update` is created when `monitor_updates.enabled` is `true`.
+Home Assistant receives the software titles `ZimaOS Operating System` and `zimaos-monitor`, so an
+update notification identifies its target even when both entries belong to the same ZimaOS device.
+`ZimaOS Operating System Update` is created when `updates.enabled` is `true`; `zimaos-monitor
+Update` is created when `monitor_updates.enabled` is `true`.
 
 ---
 
@@ -62,12 +65,24 @@ Auto-detected defaults:
 
 | Field | Source |
 |-------|--------|
-| `device.id` | Sanitized hostname (e.g. `zimaboard2`) |
+| `mqtt.client_id` | `zm-` + 20-character private machine-derived token |
+| `device.id` | `zimaos_` + a separate 20-character private machine-derived token |
 | `device.name` | `"ZimaOS <hostname>"` |
 | `device.model` | `/sys/class/dmi/id/product_name` (e.g. `ZimaBoard2`) |
 | `device.manufacturer` | `"Pocho Labs"` |
 | `device.serial_number` | `/sys/class/dmi/id/product_serial` (if available) |
 | `disks` | All `/media/*` mounts + `/DATA` → `ZimaOS-HD` |
+
+Automatic MQTT and device identities are derived from `/etc/machine-id` (with
+`/var/lib/dbus/machine-id` as a fallback), using separate privacy-safe hashes. The raw machine
+ID is never published or logged. Hostname affects only the display name, so two machines with the
+same hostname remain separate and renaming one does not change its topics or Home Assistant
+entities.
+
+If neither Linux machine-ID path is readable and valid, startup stops before connecting to MQTT.
+Repair the host machine ID or set both `mqtt.client_id` and `device.id` explicitly. Cloned
+images must regenerate their Linux machine ID before both copies run, or use unique explicit
+overrides.
 
 Override any field in `config.yaml` to customize:
 
@@ -75,6 +90,10 @@ Override any field in `config.yaml` to customize:
 device:
   name: "Living Room NAS"
   model: "ZimaCube"
+  # id: "living_room_nas_unique"
+
+mqtt:
+  # client_id: "living-room-nas-unique"
 
 disks:
   - path: "/DATA"
@@ -85,7 +104,7 @@ disks:
 
 ### `updates` section (optional)
 
-Controls the GitHub upstream version check for the ZimaOS Update entity in HA:
+Controls the GitHub upstream version check for the ZimaOS Operating System Update entity in HA:
 
 ```yaml
 updates:
@@ -103,7 +122,12 @@ monitor_updates:
   check_interval: 6h  # default 6h; minimum 1h enforced
 ```
 
-This entity is informational only. Updates are started locally from the ZimaOS host.
+Both entities are informational only. Install ZimaOS releases through the ZimaOS update interface.
+Update this monitor locally from the ZimaOS host with:
+
+```bash
+sudo /opt/zimaos-monitor/zimaos-monitor update
+```
 
 ---
 
@@ -121,16 +145,22 @@ The device card shows:
 - RAM Used %, RAM Available, and RAM Total
 - Uptime, exported as seconds and rendered by Home Assistant as a duration
 - Per-disk Used %, Used, Total, and Free (one set per `/media/*` mount and `/DATA`)
-- **ZimaOS Version** — a native informational Update entity showing installed vs. latest stable release, with a link to release notes
+- **ZimaOS Operating System Update** — identifies its software as **ZimaOS Operating System** and
+  shows the installed and latest stable ZimaOS releases with a link to release notes. Install it
+  through the ZimaOS update interface.
 - **zimaos-monitor Update** — shows the installed and latest monitor versions and links to
-  the release notes. It does not accept installation commands from MQTT; update locally with
-  `zimaos-monitor update`.
+  the release notes under the software title **zimaos-monitor**. It does not accept installation
+  commands from MQTT; update locally with `zimaos-monitor update`.
+
+Upgrading to the clearer labels updates the two existing discovery records in place. Their MQTT
+topics, Home Assistant unique IDs, device association, history, dashboards, and automation
+references do not change. A user-customized entity name or entity ID is not intentionally reset.
 
 ![Device page in Home Assistant](screenshots/screenshot-01.png)
 
 Clicking the update entity shows the installed and latest versions with a link to the release announcement:
 
-![ZimaOS Version update entity](screenshots/screenshot-02.png)
+![ZimaOS Operating System update entity](screenshots/screenshot-02.png)
 
 Each sensor includes full history tracked by Home Assistant:
 
@@ -143,13 +173,47 @@ Each sensor includes full history tracked by Home Assistant:
 | Topic | Content |
 |-------|---------|
 | `<device_id>/state` | JSON payload with all metrics (not retained) |
-| `<device_id>/update` | Flat JSON with `installed_version`, `latest_version`, `release_url` for the HA Update entity (not retained) |
-| `<device_id>/monitor/update` | Monitor update state with installed/latest versions and release URL (not retained) |
+| `<device_id>/update` | Flat JSON with `installed_version`, optional `latest_version`, optional `release_url`, and `title: "ZimaOS Operating System"` (not retained) |
+| `<device_id>/monitor/update` | Monitor update state with installed/latest versions, release URL, and `title: "zimaos-monitor"` (not retained) |
 | `homeassistant/sensor/<device_id>/+/config` | HA sensor autodiscovery (retained) |
 | `homeassistant/update/<device_id>/zimaos_version/config` | HA Update entity autodiscovery (retained) |
 | `homeassistant/update/<device_id>/zimaos_monitor/config` | Monitor Update entity autodiscovery (retained) |
 
-On startup, stale retained discovery topics from previous deployments are automatically purged to prevent duplicate sensors in HA.
+On startup, stale retained discovery is scanned only below the current `device.id`. A record is
+removed only when both its topic namespace and payload identify the current zimaos-monitor device.
+Malformed, foreign, live, or ambiguous messages are preserved. An explicit `device.id` containing
+`/`, `+`, `#`, or NUL remains usable for backward compatibility, but automatic cleanup is
+disabled with a warning because it cannot be scoped safely.
+
+### Identity migration from legacy releases
+
+Existing explicit `mqtt.client_id` and `device.id` values remain unchanged. Configurations that
+omit either field receive the new stable machine-specific value on first startup after upgrading:
+
+- the old shared automatic Client ID `zimaos-monitor` becomes `zm-<20 characters>`;
+- the old hostname-derived automatic device ID becomes `zimaos_<20 characters>`.
+
+The automatic device-ID change creates a new Home Assistant device and topic namespace. The
+service deliberately does not delete the old hostname-based retained discovery globally because
+another installation may have used the same hostname. After confirming the new device reports
+correctly, remove the legacy device from Home Assistant and delete only retained discovery topics
+whose node-ID level exactly matches the confirmed old device ID.
+
+If an older copied configuration explicitly contains `client_id: "zimaos-monitor"`, it remains
+explicit and produces a warning. Remove that line to use the automatic unique value, or replace it
+with an administrator-chosen value unique on the broker.
+
+### Identity troubleshooting
+
+- Repeated connect/disconnect messages on two hosts usually mean they share an explicit
+  `mqtt.client_id`; remove the overrides or assign distinct values.
+- Two machines merged into one Home Assistant device usually share an explicit `device.id`;
+  assign distinct values and remove only the confirmed obsolete retained discovery.
+- A `skipping stale discovery cleanup` warning means the explicit `device.id` contains MQTT
+  separators or wildcards. Publishing remains enabled, but cleanup stays disabled until the ID is
+  changed.
+- A `resolve automatic identity` startup error means neither supported Linux machine-ID file is
+  readable and valid. Repair machine-id or configure both identity overrides.
 
 ### Example payload
 
@@ -197,6 +261,7 @@ The monitor update state is published separately to `<device_id>/monitor/update`
 make build          # build for current platform
 make build-linux    # cross-compile for Linux x86_64 (ZimaOS)
 make run-dry        # run locally without MQTT, prints JSON to stdout
+make test           # Go tests + installer syntax and PTY integration tests
 make tidy           # go mod tidy
 ```
 
@@ -204,7 +269,39 @@ make tidy           # go mod tidy
 
 ## Install on ZimaOS
 
-The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs the systemd unit, and preserves any existing `config.yaml` on upgrade.
+The installer (`scripts/install.sh`) places the binary under `/opt/zimaos-monitor`, installs
+the systemd unit, and guides first-time MQTT configuration. Run it from an interactive SSH
+terminal as `root`.
+
+On first install it asks:
+
+| Question | Required | Default |
+|----------|----------|---------|
+| MQTT broker host | Yes | None |
+| MQTT broker port | No | `1883` |
+| MQTT username | No | Empty |
+| MQTT password | No | Empty |
+
+The password is entered with terminal echo disabled and is never included in the confirmation
+summary. All other settings retain their documented defaults: machine-specific client and device
+identities, 30-second publishing, automatic device and disk detection, and update checks every six
+hours.
+After a redacted confirmation, the installer writes
+`/opt/zimaos-monitor/config.yaml` as a root-only file, enables the service, starts it, and
+verifies that it is active.
+
+First installation stops before changing active files when no terminal is available, input ends,
+or confirmation is declined. Rerunning the installer with an existing configuration skips all
+questions, preserves its contents, installs new release assets, and restarts the service.
+
+The binary also exposes the configuration-only command used by the installer:
+
+```bash
+zimaos-monitor setup --output /path/to/new-config.yaml
+```
+
+It requires a terminal, refuses to replace an existing path, and does not contact MQTT, collect
+metrics, or operate systemd. Use `install.sh` for the complete supported installation lifecycle.
 
 ### Update command
 
@@ -262,27 +359,27 @@ cd zimaos-monitor-*-linux-amd64
 sudo ./install.sh
 ```
 
-On **first install** the service is enabled but not started — edit the config first:
+On first install, answer the MQTT questions and confirm the displayed settings. The service starts
+immediately. On upgrade, `config.yaml` is preserved and no questions are asked.
+
+If startup fails, the validated configuration remains available for correction:
 
 ```bash
+sudo systemctl status zimaos-monitor.service --no-pager
+sudo journalctl -u zimaos-monitor.service -n 100 --no-pager
 sudo nano /opt/zimaos-monitor/config.yaml
-sudo systemctl start zimaos-monitor
-sudo journalctl -u zimaos-monitor -f
+sudo systemctl restart zimaos-monitor.service
 ```
-
-On **upgrade**, `config.yaml` is preserved and the service restarts automatically.
 
 ### Option B: Deploy a local build (development)
 
 ```bash
 # On your dev machine:
-cp config.example.yaml config.yaml
-# Edit config.yaml with the target broker settings.
 make build-linux
 scp bin/zimaos-monitor-linux-amd64 \
-    config.yaml \
     systemd/zimaos-monitor.service \
     scripts/install.sh \
+    config.example.yaml \
     <user>@<zima-host>:/tmp/
 
 # On the ZimaOS device:
@@ -328,7 +425,7 @@ If you find this project useful, consider subscribing to my YouTube channel or f
 1. Fork the repository
 2. Create a branch: `git checkout -b feature/my-change`
 3. Copy `config.example.yaml` → `config.yaml` and configure your device
-4. Test with `make run-dry`
+4. Test with `make test` and `make run-dry`
 5. Open a pull request
 
 ## License

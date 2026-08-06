@@ -23,7 +23,28 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        run: make test
+
+      - name: Start MQTT integration broker
+        run: |
+          docker run --detach --rm --name zimaos-monitor-mqtt-test --publish 18883:1883 --volume "$GITHUB_WORKSPACE/internal/mqtt/testdata/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2.0.22
+          for attempt in {1..30}; do
+            if docker exec zimaos-monitor-mqtt-test mosquitto_pub -h 127.0.0.1 -t health -m ready; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs zimaos-monitor-mqtt-test
+          exit 1
+
+      - name: Test simultaneous MQTT installations
+        env:
+          MQTT_TEST_BROKER: tcp://127.0.0.1:18883
+        run: make test-integration
+
+      - name: Stop MQTT integration broker
+        if: always()
+        run: docker rm --force zimaos-monitor-mqtt-test || true
 
       - name: Build (Linux amd64)
-        run: GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" ./cmd/zimaos-monitor
+        run: make build-linux
