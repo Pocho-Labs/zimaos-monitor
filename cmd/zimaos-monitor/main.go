@@ -27,6 +27,7 @@ type zimaosInfo struct {
 	InstalledVersion string `json:"installed_version"`
 	LatestVersion    string `json:"latest_version,omitempty"`
 	ReleaseURL       string `json:"release_url,omitempty"`
+	Title            string `json:"title"`
 }
 
 type monitorUpdateInfo struct {
@@ -34,6 +35,24 @@ type monitorUpdateInfo struct {
 	LatestVersion    string `json:"latest_version,omitempty"`
 	ReleaseURL       string `json:"release_url,omitempty"`
 	Title            string `json:"title"`
+}
+
+func newZimaOSUpdateInfo(installedVersion, latestVersion, releaseURL string) zimaosInfo {
+	return zimaosInfo{
+		InstalledVersion: installedVersion,
+		LatestVersion:    latestVersion,
+		ReleaseURL:       releaseURL,
+		Title:            mqttclient.ZimaOSUpdateTitle,
+	}
+}
+
+func newMonitorUpdateInfo(installedVersion, latestVersion, releaseURL string) monitorUpdateInfo {
+	return monitorUpdateInfo{
+		InstalledVersion: installedVersion,
+		LatestVersion:    latestVersion,
+		ReleaseURL:       releaseURL,
+		Title:            mqttclient.MonitorUpdateTitle,
+	}
 }
 
 type metrics struct {
@@ -77,6 +96,9 @@ func main() {
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	for _, warning := range cfg.Identity.Warnings {
+		log.Printf("warn: identity: %s", warning)
 	}
 	zimaosVersion := collector.ZimaOSVersion()
 	log.Printf("zimaos version: %q", zimaosVersion)
@@ -134,10 +156,7 @@ func main() {
 	monitorUpdateTopic := fmt.Sprintf("%s/monitor/update", cfg.Device.ID)
 
 	monitorState := func() monitorUpdateInfo {
-		info := monitorUpdateInfo{
-			InstalledVersion: version,
-			Title:            "zimaos-monitor",
-		}
+		info := newMonitorUpdateInfo(version, "", "")
 		if monitorChecker != nil {
 			release := monitorChecker.Latest()
 			info.LatestVersion = release.Version
@@ -178,7 +197,7 @@ func main() {
 			log.Printf("warn: uptime: %v", err)
 		}
 
-		zi := zimaosInfo{InstalledVersion: zimaosVersion}
+		zi := newZimaOSUpdateInfo(zimaosVersion, "", "")
 		if upstream != nil {
 			zi.LatestVersion, zi.ReleaseURL = upstream.Latest()
 		}
